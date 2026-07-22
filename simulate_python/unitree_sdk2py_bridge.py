@@ -13,23 +13,31 @@ from unitree_sdk2py.idl.default import unitree_go_msg_dds__WirelessController_
 from unitree_sdk2py.utils.thread import RecurrentThread
 
 import config
-if config.ROBOT=="g1":
+
+if config.ROBOT == "g1":
     from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_
     from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
-    from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_ as LowState_default
+    from unitree_sdk2py.idl.default import (
+        unitree_hg_msg_dds__LowState_ as LowState_default,
+    )
 else:
     from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_
     from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowState_
-    from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowState_ as LowState_default
+    from unitree_sdk2py.idl.default import (
+        unitree_go_msg_dds__LowState_ as LowState_default,
+    )
 
 TOPIC_LOWCMD = "rt/lowcmd"
 TOPIC_LOWSTATE = "rt/lowstate"
 TOPIC_HIGHSTATE = "rt/sportmodestate"
 TOPIC_WIRELESS_CONTROLLER = "rt/wirelesscontroller"
+TOPIC_IMAGE_COLOR = "/color/image_raw"
+TOPIC_IMAGE_DEPTH = "/depth/image_raw"
 
 MOTOR_SENSOR_NUM = 3
 NUM_MOTOR_IDL_GO = 20
 NUM_MOTOR_IDL_HG = 35
+
 
 class UnitreeSdk2Bridge:
 
@@ -42,15 +50,13 @@ class UnitreeSdk2Bridge:
         self.have_imu = False
         self.have_frame_sensor = False
         self.dt = self.mj_model.opt.timestep
-        self.idl_type = (self.num_motor > NUM_MOTOR_IDL_GO) # 0: unitree_go, 1: unitree_hg
+        self.idl_type = self.num_motor > NUM_MOTOR_IDL_GO  # 0: unitree_go, 1: unitree_hg
 
         self.joystick = None
 
         # Check sensor
         for i in range(self.dim_motor_sensor, self.mj_model.nsensor):
-            name = mujoco.mj_id2name(
-                self.mj_model, mujoco._enums.mjtObj.mjOBJ_SENSOR, i
-            )
+            name = mujoco.mj_id2name(self.mj_model, mujoco._enums.mjtObj.mjOBJ_SENSOR, i)
             if name == "imu_quat":
                 self.have_imu_ = True
             if name == "frame_pos":
@@ -60,23 +66,17 @@ class UnitreeSdk2Bridge:
         self.low_state = LowState_default()
         self.low_state_puber = ChannelPublisher(TOPIC_LOWSTATE, LowState_)
         self.low_state_puber.Init()
-        self.lowStateThread = RecurrentThread(
-            interval=self.dt, target=self.PublishLowState, name="sim_lowstate"
-        )
+        self.lowStateThread = RecurrentThread(interval=self.dt, target=self.PublishLowState, name="sim_lowstate")
         self.lowStateThread.Start()
 
         self.high_state = unitree_go_msg_dds__SportModeState_()
         self.high_state_puber = ChannelPublisher(TOPIC_HIGHSTATE, SportModeState_)
         self.high_state_puber.Init()
-        self.HighStateThread = RecurrentThread(
-            interval=self.dt, target=self.PublishHighState, name="sim_highstate"
-        )
+        self.HighStateThread = RecurrentThread(interval=self.dt, target=self.PublishHighState, name="sim_highstate")
         self.HighStateThread.Start()
 
         self.wireless_controller = unitree_go_msg_dds__WirelessController_()
-        self.wireless_controller_puber = ChannelPublisher(
-            TOPIC_WIRELESS_CONTROLLER, WirelessController_
-        )
+        self.wireless_controller_puber = ChannelPublisher(TOPIC_WIRELESS_CONTROLLER, WirelessController_)
         self.wireless_controller_puber.Init()
         self.WirelessControllerThread = RecurrentThread(
             interval=0.01,
@@ -113,60 +113,31 @@ class UnitreeSdk2Bridge:
             for i in range(self.num_motor):
                 self.mj_data.ctrl[i] = (
                     msg.motor_cmd[i].tau
-                    + msg.motor_cmd[i].kp
-                    * (msg.motor_cmd[i].q - self.mj_data.sensordata[i])
-                    + msg.motor_cmd[i].kd
-                    * (
-                        msg.motor_cmd[i].dq
-                        - self.mj_data.sensordata[i + self.num_motor]
-                    )
+                    + msg.motor_cmd[i].kp * (msg.motor_cmd[i].q - self.mj_data.sensordata[i])
+                    + msg.motor_cmd[i].kd * (msg.motor_cmd[i].dq - self.mj_data.sensordata[i + self.num_motor])
                 )
 
     def PublishLowState(self):
         if self.mj_data != None:
             for i in range(self.num_motor):
                 self.low_state.motor_state[i].q = self.mj_data.sensordata[i]
-                self.low_state.motor_state[i].dq = self.mj_data.sensordata[
-                    i + self.num_motor
-                ]
-                self.low_state.motor_state[i].tau_est = self.mj_data.sensordata[
-                    i + 2 * self.num_motor
-                ]
+                self.low_state.motor_state[i].dq = self.mj_data.sensordata[i + self.num_motor]
+                self.low_state.motor_state[i].tau_est = self.mj_data.sensordata[i + 2 * self.num_motor]
 
             if self.have_frame_sensor_:
 
-                self.low_state.imu_state.quaternion[0] = self.mj_data.sensordata[
-                    self.dim_motor_sensor + 0
-                ]
-                self.low_state.imu_state.quaternion[1] = self.mj_data.sensordata[
-                    self.dim_motor_sensor + 1
-                ]
-                self.low_state.imu_state.quaternion[2] = self.mj_data.sensordata[
-                    self.dim_motor_sensor + 2
-                ]
-                self.low_state.imu_state.quaternion[3] = self.mj_data.sensordata[
-                    self.dim_motor_sensor + 3
-                ]
+                self.low_state.imu_state.quaternion[0] = self.mj_data.sensordata[self.dim_motor_sensor + 0]
+                self.low_state.imu_state.quaternion[1] = self.mj_data.sensordata[self.dim_motor_sensor + 1]
+                self.low_state.imu_state.quaternion[2] = self.mj_data.sensordata[self.dim_motor_sensor + 2]
+                self.low_state.imu_state.quaternion[3] = self.mj_data.sensordata[self.dim_motor_sensor + 3]
 
-                self.low_state.imu_state.gyroscope[0] = self.mj_data.sensordata[
-                    self.dim_motor_sensor + 4
-                ]
-                self.low_state.imu_state.gyroscope[1] = self.mj_data.sensordata[
-                    self.dim_motor_sensor + 5
-                ]
-                self.low_state.imu_state.gyroscope[2] = self.mj_data.sensordata[
-                    self.dim_motor_sensor + 6
-                ]
+                self.low_state.imu_state.gyroscope[0] = self.mj_data.sensordata[self.dim_motor_sensor + 4]
+                self.low_state.imu_state.gyroscope[1] = self.mj_data.sensordata[self.dim_motor_sensor + 5]
+                self.low_state.imu_state.gyroscope[2] = self.mj_data.sensordata[self.dim_motor_sensor + 6]
 
-                self.low_state.imu_state.accelerometer[0] = self.mj_data.sensordata[
-                    self.dim_motor_sensor + 7
-                ]
-                self.low_state.imu_state.accelerometer[1] = self.mj_data.sensordata[
-                    self.dim_motor_sensor + 8
-                ]
-                self.low_state.imu_state.accelerometer[2] = self.mj_data.sensordata[
-                    self.dim_motor_sensor + 9
-                ]
+                self.low_state.imu_state.accelerometer[0] = self.mj_data.sensordata[self.dim_motor_sensor + 7]
+                self.low_state.imu_state.accelerometer[1] = self.mj_data.sensordata[self.dim_motor_sensor + 8]
+                self.low_state.imu_state.accelerometer[2] = self.mj_data.sensordata[self.dim_motor_sensor + 9]
 
             if self.joystick != None:
                 pygame.event.get()
@@ -196,12 +167,12 @@ class UnitreeSdk2Bridge:
                             for key in [
                                 int(self.joystick.get_hat(0)[0] < 0),  # left
                                 int(self.joystick.get_hat(0)[1] < 0),  # down
-                                int(self.joystick.get_hat(0)[0] > 0), # right
-                                int(self.joystick.get_hat(0)[1] > 0),    # up
-                                int(self.joystick.get_button(self.button_id["Y"])),     # Y
-                                int(self.joystick.get_button(self.button_id["X"])),     # X
-                                int(self.joystick.get_button(self.button_id["B"])),     # B
-                                int(self.joystick.get_button(self.button_id["A"])),     # A
+                                int(self.joystick.get_hat(0)[0] > 0),  # right
+                                int(self.joystick.get_hat(0)[1] > 0),  # up
+                                int(self.joystick.get_button(self.button_id["Y"])),  # Y
+                                int(self.joystick.get_button(self.button_id["X"])),  # X
+                                int(self.joystick.get_button(self.button_id["B"])),  # B
+                                int(self.joystick.get_button(self.button_id["A"])),  # A
                             ]
                         ]
                     ),
@@ -225,25 +196,13 @@ class UnitreeSdk2Bridge:
     def PublishHighState(self):
 
         if self.mj_data != None:
-            self.high_state.position[0] = self.mj_data.sensordata[
-                self.dim_motor_sensor + 10
-            ]
-            self.high_state.position[1] = self.mj_data.sensordata[
-                self.dim_motor_sensor + 11
-            ]
-            self.high_state.position[2] = self.mj_data.sensordata[
-                self.dim_motor_sensor + 12
-            ]
+            self.high_state.position[0] = self.mj_data.sensordata[self.dim_motor_sensor + 10]
+            self.high_state.position[1] = self.mj_data.sensordata[self.dim_motor_sensor + 11]
+            self.high_state.position[2] = self.mj_data.sensordata[self.dim_motor_sensor + 12]
 
-            self.high_state.velocity[0] = self.mj_data.sensordata[
-                self.dim_motor_sensor + 13
-            ]
-            self.high_state.velocity[1] = self.mj_data.sensordata[
-                self.dim_motor_sensor + 14
-            ]
-            self.high_state.velocity[2] = self.mj_data.sensordata[
-                self.dim_motor_sensor + 15
-            ]
+            self.high_state.velocity[0] = self.mj_data.sensordata[self.dim_motor_sensor + 13]
+            self.high_state.velocity[1] = self.mj_data.sensordata[self.dim_motor_sensor + 14]
+            self.high_state.velocity[2] = self.mj_data.sensordata[self.dim_motor_sensor + 15]
 
         self.high_state_puber.Write(self.high_state)
 
@@ -251,24 +210,12 @@ class UnitreeSdk2Bridge:
         if self.joystick != None:
             pygame.event.get()
             key_state = [0] * 16
-            key_state[self.key_map["R1"]] = self.joystick.get_button(
-                self.button_id["RB"]
-            )
-            key_state[self.key_map["L1"]] = self.joystick.get_button(
-                self.button_id["LB"]
-            )
-            key_state[self.key_map["start"]] = self.joystick.get_button(
-                self.button_id["START"]
-            )
-            key_state[self.key_map["select"]] = self.joystick.get_button(
-                self.button_id["SELECT"]
-            )
-            key_state[self.key_map["R2"]] = (
-                self.joystick.get_axis(self.axis_id["RT"]) > 0
-            )
-            key_state[self.key_map["L2"]] = (
-                self.joystick.get_axis(self.axis_id["LT"]) > 0
-            )
+            key_state[self.key_map["R1"]] = self.joystick.get_button(self.button_id["RB"])
+            key_state[self.key_map["L1"]] = self.joystick.get_button(self.button_id["LB"])
+            key_state[self.key_map["start"]] = self.joystick.get_button(self.button_id["START"])
+            key_state[self.key_map["select"]] = self.joystick.get_button(self.button_id["SELECT"])
+            key_state[self.key_map["R2"]] = self.joystick.get_axis(self.axis_id["RT"]) > 0
+            key_state[self.key_map["L2"]] = self.joystick.get_axis(self.axis_id["LT"]) > 0
             key_state[self.key_map["F1"]] = 0
             key_state[self.key_map["F2"]] = 0
             key_state[self.key_map["A"]] = self.joystick.get_button(self.button_id["A"])
@@ -370,9 +317,7 @@ class UnitreeSdk2Bridge:
 
         print("<<------------- Actuator ------------->>")
         for i in range(self.mj_model.nu):
-            name = mujoco.mj_id2name(
-                self.mj_model, mujoco._enums.mjtObj.mjOBJ_ACTUATOR, i
-            )
+            name = mujoco.mj_id2name(self.mj_model, mujoco._enums.mjtObj.mjOBJ_ACTUATOR, i)
             if name:
                 print("actuator_index:", i, ", name:", name)
         print(" ")
@@ -380,9 +325,7 @@ class UnitreeSdk2Bridge:
         print("<<------------- Sensor ------------->>")
         index = 0
         for i in range(self.mj_model.nsensor):
-            name = mujoco.mj_id2name(
-                self.mj_model, mujoco._enums.mjtObj.mjOBJ_SENSOR, i
-            )
+            name = mujoco.mj_id2name(self.mj_model, mujoco._enums.mjtObj.mjOBJ_SENSOR, i)
             if name:
                 print(
                     "sensor_index:",

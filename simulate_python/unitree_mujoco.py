@@ -1,4 +1,5 @@
 import time
+import signal
 import mujoco
 import mujoco.viewer
 from threading import Thread
@@ -32,9 +33,11 @@ dim_motor_sensor_ = 3 * num_motor_
 
 time.sleep(0.2)
 
+unitree = None
+
 
 def SimulationThread():
-    global mj_data, mj_model
+    global mj_data, mj_model, unitree
 
     ChannelFactoryInitialize(config.DOMAIN_ID, config.INTERFACE)
     unitree = UnitreeSdk2Bridge(mj_model, mj_data)
@@ -60,6 +63,8 @@ def SimulationThread():
         if time_until_next_step > 0:
             time.sleep(time_until_next_step)
 
+    unitree.Stop()
+
 
 def PhysicsViewerThread():
     while viewer.is_running():
@@ -69,9 +74,20 @@ def PhysicsViewerThread():
         time.sleep(config.VIEWER_DT)
 
 
+def _signal_handler(sig, frame):
+    viewer.close()
+
+
 if __name__ == "__main__":
-    viewer_thread = Thread(target=PhysicsViewerThread)
-    sim_thread = Thread(target=SimulationThread)
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
+
+    viewer_thread = Thread(target=PhysicsViewerThread, daemon=True)
+    sim_thread = Thread(target=SimulationThread, daemon=True)
 
     viewer_thread.start()
     sim_thread.start()
+
+    viewer_thread.join()
+    sim_thread.join()
+    print("Simulation terminated.")

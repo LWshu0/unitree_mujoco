@@ -116,9 +116,7 @@ class UnitreeSdk2Bridge:
             self._camera_setup()
 
     def _camera_setup(self):
-        camera_id = mujoco.mj_name2id(
-            self.mj_model, mujoco.mjtObj.mjOBJ_CAMERA, config.CAMERA_NAME
-        )
+        camera_id = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_CAMERA, config.CAMERA_NAME)
         if camera_id < 0:
             print("Camera '{}' not found in model, disabling camera.".format(config.CAMERA_NAME))
             return
@@ -156,9 +154,7 @@ class UnitreeSdk2Bridge:
 
     def PublishCameraImages(self):
         if self._cam_renderer is None:
-            self._cam_renderer = mujoco.Renderer(
-                self.mj_model, height=self._cam_h, width=self._cam_w
-            )
+            self._cam_renderer = mujoco.Renderer(self.mj_model, height=self._cam_h, width=self._cam_w)
 
         self._cam_renderer.update_scene(self.mj_data, camera=self._cam_name)
 
@@ -190,6 +186,15 @@ class UnitreeSdk2Bridge:
         depth_msg.encoding = "mono16"
         depth_msg.data = depth_mm.tobytes()
         self._depth_puber.Write(depth_msg)
+
+    def Stop(self):
+        self.lowStateThread.Wait()
+        self.HighStateThread.Wait()
+        self.WirelessControllerThread.Wait()
+        if hasattr(self, "_camera_thread"):
+            self._camera_thread.Wait()
+        if hasattr(self, "_cam_renderer") and self._cam_renderer is not None:
+            self._cam_renderer.close()
 
     def LowCmdHandler(self, msg: LowCmd_):
         if self.mj_data != None:

@@ -3,6 +3,7 @@ import numpy as np
 import pygame
 import sys
 import struct
+import time
 
 from unitree_sdk2py.core.channel import ChannelSubscriber, ChannelPublisher
 
@@ -11,6 +12,9 @@ from unitree_sdk2py.idl.unitree_go.msg.dds_ import WirelessController_
 from unitree_sdk2py.idl.default import unitree_go_msg_dds__SportModeState_
 from unitree_sdk2py.idl.default import unitree_go_msg_dds__WirelessController_
 from unitree_sdk2py.utils.thread import RecurrentThread
+
+from unitree_go_image import Image_, unitree_go_msg_dds__Image_
+from camera_randomizer import DepthRandomizer
 
 import config
 
@@ -107,6 +111,85 @@ class UnitreeSdk2Bridge:
             "down": 14,
             "left": 15,
         }
+
+        if config.CAMERA_ENABLED:
+            self._camera_setup()
+
+    def _camera_setup(self):
+        camera_id = mujoco.mj_name2id(
+            self.mj_model, mujoco.mjtObj.mjOBJ_CAMERA, config.CAMERA_NAME
+        )
+        if camera_id < 0:
+            print("Camera '{}' not found in model, disabling camera.".format(config.CAMERA_NAME))
+            return
+
+        self._cam_name = config.CAMERA_NAME
+        self._cam_resolution = self.mj_model.cam_resolution[camera_id]
+        self._cam_w = self._cam_resolution[0]
+        self._cam_h = self._cam_resolution[1]
+
+        self._cam_renderer = None
+
+        self._depth_randomizer = DepthRandomizer(
+            gaussian_std=config.DEPTH_GAUSSIAN_NOISE_STD,
+            dropout_rate=config.DEPTH_DROPOUT_RATE,
+            quantization=config.DEPTH_QUANTIZATION,
+            edge_distortion=config.DEPTH_EDGE_DISTORTION,
+            edge_shift_std=config.DEPTH_EDGE_SHIFT_STD,
+            edge_kernel_size=config.DEPTH_EDGE_KERNEL_SIZE,
+            systematic_missing_rate=config.DEPTH_SYSTEMATIC_MISSING_RATE,
+            missing_patch_size=config.DEPTH_MISSING_PATCH_SIZE,
+        )
+
+        self._color_puber = ChannelPublisher(TOPIC_IMAGE_COLOR, Image_)
+        self._color_puber.Init()
+        self._depth_puber = ChannelPublisher(TOPIC_IMAGE_DEPTH, Image_)
+        self._depth_puber.Init()
+
+        interval = 1.0 / config.CAMERA_FPS
+        self._camera_thread = RecurrentThread(
+            interval=interval,
+            target=self.PublishCameraImages,
+            name="sim_camera",
+        )
+        self._camera_thread.Start()
+
+    def PublishCameraImages(self):
+        if self._cam_renderer is None:
+            self._cam_renderer = mujoco.Renderer(
+                self.mj_model, height=self._cam_h, width=self._cam_w
+            )
+
+        self._cam_renderer.update_scene(self.mj_data, camera=self._cam_name)
+
+        color_img = self._cam_renderer.render()
+        color_msg = unitree_go_msg_dds__Image_()
+        color_msg.timestamp = int(time.time() * 1e6)
+        color_msg.width = self._cam_w
+        color_msg.height = self._cam_h
+        color_msg.step = self._cam_w * 3
+        color_msg.encoding = "bgr8"
+        color_msg.data = color_img.copy().tobytes()
+        self._color_puber.Write(color_msg)
+
+        self._cam_renderer.enable_depth_rendering()
+        depth = self._cam_renderer.render()
+        self._cam_renderer.disable_depth_rendering()
+
+        depth[depth > config.DEPTH_CLIP_FAR] = 0.0
+        depth[depth < config.DEPTH_CLIP_NEAR] = 0.0
+
+        depth = self._depth_randomizer.randomize(depth)
+
+        depth_mm = (depth * 1000.0).clip(0, 65535).astype(np.uint16)
+        depth_msg = unitree_go_msg_dds__Image_()
+        depth_msg.timestamp = int(time.time() * 1e6)
+        depth_msg.width = self._cam_w
+        depth_msg.height = self._cam_h
+        depth_msg.step = self._cam_w * 2
+        depth_msg.encoding = "mono16"
+        depth_msg.data = depth_mm.tobytes()
+        self._depth_puber.Write(depth_msg)
 
     def LowCmdHandler(self, msg: LowCmd_):
         if self.mj_data != None:

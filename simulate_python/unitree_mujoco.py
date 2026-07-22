@@ -22,9 +22,7 @@ if config.ENABLE_ELASTIC_BAND:
         band_attached_link = mj_model.body("torso_link").id
     else:
         band_attached_link = mj_model.body("base_link").id
-    viewer = mujoco.viewer.launch_passive(
-        mj_model, mj_data, key_callback=elastic_band.MujuocoKeyCallback
-    )
+    viewer = mujoco.viewer.launch_passive(mj_model, mj_data, key_callback=elastic_band.MujuocoKeyCallback)
 else:
     viewer = mujoco.viewer.launch_passive(mj_model, mj_data)
 
@@ -53,16 +51,12 @@ def SimulationThread():
 
         if config.ENABLE_ELASTIC_BAND:
             if elastic_band.enable:
-                mj_data.xfrc_applied[band_attached_link, :3] = elastic_band.Advance(
-                    mj_data.qpos[:3], mj_data.qvel[:3]
-                )
+                mj_data.xfrc_applied[band_attached_link, :3] = elastic_band.Advance(mj_data.qpos[:3], mj_data.qvel[:3])
         mujoco.mj_step(mj_model, mj_data)
 
         locker.release()
 
-        time_until_next_step = mj_model.opt.timestep - (
-            time.perf_counter() - step_start
-        )
+        time_until_next_step = mj_model.opt.timestep - (time.perf_counter() - step_start)
         if time_until_next_step > 0:
             time.sleep(time_until_next_step)
 

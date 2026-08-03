@@ -14,7 +14,6 @@ from simulate_python.unitree_go_image import Image_
 
 TOPIC_IMAGE_DEPTH = "/depth/image_raw"
 
-_lock = threading.Lock()
 _latest = None
 _frame_count = 0
 
@@ -27,21 +26,12 @@ def depth_callback(msg: Image_):
     depth_m = depth_mm.astype(np.float32) / 1000.0
 
     valid = depth_m > 0
-    display = np.zeros_like(depth_m, dtype=np.uint8)
+    vmin, vmax = 0.0, 5.0  # 固定范围
+    clipped = np.clip(depth_m, vmin, vmax)
+    display = ((clipped - vmin) / (vmax - vmin) * 255).astype(np.uint8)
 
-    if np.any(valid):
-        vmin, vmax = np.percentile(depth_m[valid], [2, 98])
-        if vmax <= vmin:
-            vmax = vmin + 1e-6
-        clipped = np.clip(depth_m, vmin, vmax)
-        display = ((clipped - vmin) / (vmax - vmin) * 255).astype(np.uint8)
-
-    depth_colored = cv2.applyColorMap(display, cv2.COLORMAP_JET)
-    depth_colored[~valid] = 0
-
-    with _lock:
-        global _latest
-        _latest = depth_colored
+    global _latest
+    _latest = display
 
     if _frame_count <= 1:
         print(
@@ -54,18 +44,20 @@ if __name__ == "__main__":
     ChannelFactoryInitialize(0, "lo")
 
     sub = ChannelSubscriber(TOPIC_IMAGE_DEPTH, Image_)
-    sub.Init(depth_callback, 10)
+    sub.Init(depth_callback, 1)
 
     cv2.namedWindow("Depth Image", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Depth Image", 1280, 960)
+    cv2.resizeWindow("Depth Image", 640, 480)
 
     print("Waiting for depth images... Press 'q' to quit.")
     try:
         while True:
-            with _lock:
-                frame = _latest.copy() if _latest is not None else None
-            if frame is not None:
-                cv2.imshow("Depth Image", frame)
+            gray = _latest
+            if gray is not None:
+                colored = cv2.applyColorMap(gray, cv2.COLORMAP_JET)
+                colored_resized = cv2.resize(colored, (640, 480), interpolation=cv2.INTER_NEAREST)
+                cv2.imshow("Depth Image", colored_resized)
+
             if cv2.waitKey(33) & 0xFF == ord("q"):
                 break
     except KeyboardInterrupt:

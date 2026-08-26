@@ -4,6 +4,7 @@ import pygame
 import sys
 import struct
 import time
+from contextlib import nullcontext
 
 from unitree_sdk2py.core.channel import ChannelSubscriber, ChannelPublisher
 
@@ -41,13 +42,18 @@ TOPIC_IMAGE_DEPTH = "/depth/image_raw"
 MOTOR_SENSOR_NUM = 3
 NUM_MOTOR_IDL_GO = 20
 NUM_MOTOR_IDL_HG = 35
+FOOT_ORDER = ("FR", "FL", "RR", "RL")
 
 
 class UnitreeSdk2Bridge:
 
-    def __init__(self, mj_model, mj_data):
+    def __init__(self, mj_model, mj_data, data_lock=None):
         self.mj_model = mj_model
         self.mj_data = mj_data
+        # The simulation loop may update mjData from another thread.  Contact
+        # arrays are resized during mj_step, so their traversal must share its
+        # lock to avoid reading a stale ncon followed by contact[index].
+        self._data_lock = data_lock
 
         self.num_motor = self.mj_model.nu
         self.dim_motor_sensor = MOTOR_SENSOR_NUM * self.num_motor
@@ -65,6 +71,19 @@ class UnitreeSdk2Bridge:
                 self.have_imu_ = True
             if name == "frame_pos":
                 self.have_frame_sensor_ = True
+
+        # The quadruped XML models name their collision geoms FR, FL, RR and RL.
+        # Keep the IDs here rather than adding force sensors to sensordata: contact
+        # forces are then independent of the number and ordering of other sensors.
+        self.foot_geom_ids = {
+            name: mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_GEOM, name) for name in FOOT_ORDER
+        }
+        self.foot_geom_to_index = {
+            geom_id: index for index, geom_id in enumerate(self.foot_geom_ids.values()) if geom_id >= 0
+        }
+        self.have_foot_force_ = hasattr(LowState_default(), "foot_force") and all(
+            geom_id >= 0 for geom_id in self.foot_geom_ids.values()
+        )
 
         # Unitree sdk2 message
         self.low_state = LowState_default()
@@ -212,6 +231,8 @@ class UnitreeSdk2Bridge:
                 self.low_state.motor_state[i].dq = self.mj_data.sensordata[i + self.num_motor]
                 self.low_state.motor_state[i].tau_est = self.mj_data.sensordata[i + 2 * self.num_motor]
 
+            self._UpdateFootForce()
+
             if self.have_frame_sensor_:
 
                 self.low_state.imu_state.quaternion[0] = self.mj_data.sensordata[self.dim_motor_sensor + 0]
@@ -280,6 +301,35 @@ class UnitreeSdk2Bridge:
                 self.low_state.wireless_remote[20:24] = packs[3]
 
             self.low_state_puber.Write(self.low_state)
+
+    def _UpdateFootForce(self):
+        """Publish per-foot normal contact loads in LowState.foot_force.
+
+        MuJoCo reports the normal component of every active contact in index 0 of
+        ``mj_contactForce``.  A foot can have multiple contact points, so their
+        normal loads are accumulated.  The DDS field is int16, in newtons.
+        """
+        if not self.have_foot_force_:
+            return
+
+        foot_force = np.zeros(4, dtype=np.float64)
+        contact_force = np.zeros(6, dtype=np.float64)
+
+        data_lock = getattr(self, "_data_lock", None)
+        with data_lock if data_lock is not None else nullcontext():
+            for contact_id in range(self.mj_data.ncon):
+                contact = self.mj_data.contact[contact_id]
+                foot_index = self.foot_geom_to_index.get(contact.geom1)
+                if foot_index is None:
+                    foot_index = self.foot_geom_to_index.get(contact.geom2)
+                if foot_index is None:
+                    continue
+
+                mujoco.mj_contactForce(self.mj_model, self.mj_data, contact_id, contact_force)
+                foot_force[foot_index] += contact_force[0]
+
+        for index, force in enumerate(foot_force):
+            self.low_state.foot_force[index] = int(np.clip(np.rint(force), -32768, 32767))
 
     def PublishHighState(self):
 

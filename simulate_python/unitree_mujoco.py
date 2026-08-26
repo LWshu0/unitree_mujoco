@@ -40,7 +40,7 @@ def SimulationThread():
     global mj_data, mj_model, unitree
 
     ChannelFactoryInitialize(config.DOMAIN_ID, config.INTERFACE)
-    unitree = UnitreeSdk2Bridge(mj_model, mj_data)
+    unitree = UnitreeSdk2Bridge(mj_model, mj_data, locker)
 
     if config.USE_JOYSTICK:
         unitree.SetupJoystick(device_id=0, js_type=config.JOYSTICK_TYPE)
